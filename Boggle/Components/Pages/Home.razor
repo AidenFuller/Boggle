@@ -1,0 +1,285 @@
+﻿@page "/"
+@using System.Diagnostics
+@using System.Security
+
+@inject IDialogService DialogService
+
+<MudContainer Class="mt-8 px-8" MaxWidth="MaxWidth.False">
+    <MudGrid>
+        <MudItem xs="6">
+            @if (_refreshing)
+            {
+                <MudText>loading</MudText>
+            }
+            else
+            {
+                @foreach (var row in _board)
+                {
+                    <MudGrid Spacing="0" Justify="Justify.Center">
+                        @foreach (var cell in row)
+                        {
+                            <MudItem Class="ma-3">
+                                <MudPaper Height="140px" Width="140px" Class="@(cell.IsHighlighted ? "py-3 mud-theme-success" : "py-3 mud-theme-primary")">
+                                    <MudText Typo="Typo.h1" Color="Color.Default" Class="text-center">@cell.Letter</MudText>
+                                </MudPaper>
+                            </MudItem>
+                        }
+                    </MudGrid>
+                }
+            }
+        </MudItem>
+        <MudItem xs="6">
+            <MudGrid>
+                <MudItem xs="6">
+                    <MudButton Color="@Color.Primary" Variant="Variant.Filled" EndIcon="@Icons.Material.Filled.Refresh" OnClick="StartGame">Refresh</MudButton>
+                </MudItem>
+                <MudItem xs="6">
+                    <MudText>Time Left: @_timeLeft</MudText>
+                    <MudProgressCircular Size="Size.Large" Value="@(TimerLengthSeconds - _timeLeft)" Min="0" Max="@TimerLengthSeconds"/>
+                </MudItem>
+            </MudGrid>
+            <MudDivider/>
+            <MudSpacer/>
+            @if (_searching)
+            {
+                <MudText>Searching...</MudText><MudProgressCircular Indeterminate="true"/>
+            }
+            else
+            {
+                <MudTable Items="@_foundWords" Dense="true" @bind-SelectedItem="SelectedWord" Filter="FilterFunc" Virtualize="true" Height="400px">
+                    <ToolBarContent>
+                        <MudText Typo="Typo.h6">Dictionary Words</MudText>
+                        <MudSpacer />
+                        <MudTextField @bind-Value="_searchWord" Placeholder="Search" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"></MudTextField>
+                    </ToolBarContent>
+                    <HeaderContent>
+                        <MudTh>Word</MudTh>
+                        <MudTh>Score</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Word">@context</MudTd>
+                        <MudTd DataLabel="Score">@(Math.Max(1, context.Length - 3))</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudItem>
+    </MudGrid>
+</MudContainer>
+
+
+
+@code {
+
+    private bool _refreshing = true;
+    private Cell[][] _board;
+    private readonly System.Timers.Timer _timer = new(1000);
+    private int _timeLeft;
+    private const int TimerLengthSeconds = 180;
+    private string _selectedWord;
+    private string _searchWord;
+    private bool _searching;
+    private List<string> _validWords;
+    private List<string> _foundWords = new();
+    private const int BoardSize = 4;
+
+    private string SelectedWord
+    {
+        get => _selectedWord;
+        set
+        {
+            _selectedWord = value;
+            HighlightWordOnBoard(value);
+        }
+    }
+    
+    protected override async Task OnInitializedAsync()
+    {
+        using var reader = new StreamReader("wwwroot/dictionary.txt");
+        _validWords = (await reader.ReadToEndAsync()).Split("\n").Where(x => x.Trim().Length >= 3 && x.Trim().Length <= 17 && (!x.Contains("Q") || x.Contains("Qu"))).Select(x => x.Trim().ToUpper()).Distinct().ToList();
+        
+        _board = GetBlankBoard();
+        _refreshing = false;
+        
+        _timer.Elapsed += async (sender, args) =>
+        {
+            _timeLeft--;
+            if (_timeLeft == 0)
+            {
+                _timer.Stop();
+                await InvokeAsync(async () => await DialogService.ShowMessageBox("Game Over", "Time's up!"));
+            }
+
+            await InvokeAsync(StateHasChanged);
+        };
+    }
+    
+    private static string[][] Dice => new string[][]
+    {
+        ["T", "S", "S", "O", "I", "E"],
+        ["O", "B", "B", "A", "O", "J"],
+        ["S", "T", "D", "T", "I", "Y"],
+        ["S", "U", "I", "E", "E", "N"],
+        ["C", "A", "P", "S", "O", "H"],
+        ["R", "H", "N", "L", "Z", "N"],
+        ["N", "M", "I", "H", "U", "Qu"],
+        ["O", "A", "W", "T", "O", "T"],
+        ["E", "E", "G", "H", "W", "N"],
+        ["L", "R", "E", "V", "D", "Y"],
+        ["T", "E", "R", "T", "L", "Y"],
+        ["T", "E", "R", "W", "H", "V"],
+        ["E", "E", "G", "N", "A", "A"],
+        ["L", "R", "H", "N", "Z", "N"],
+        ["P", "F", "F", "S", "A", "K"],
+        ["C", "I", "O", "M", "U", "T"],
+        ["L", "R", "X", "D", "I", "E"]
+    };
+
+    private async Task StartGame()
+    {
+        _refreshing = true;
+        _timeLeft = TimerLengthSeconds;
+        _board = GenerateRandomBoard();
+        await GetValidWordsFromDictionary();
+        _refreshing = false;
+        _timer.Start();
+    }
+
+    private static Cell[][] GetBlankBoard()
+    {
+        var board = new Cell[BoardSize][];
+        for (var row = 0; row < BoardSize; row++)
+        {
+            board[row] = new Cell[BoardSize];
+            for (var col = 0; col < BoardSize; col++)
+            {
+                board[row][col] = new Cell { Letter = null, Row = row, Column = col };
+            }
+        }
+
+        return board;
+    }
+    
+    private static Cell[][] GenerateRandomBoard()
+    {
+        var rng = new Random();
+        var board = new Cell[BoardSize][];
+        var diceList = Dice.ToList();
+        var n = diceList.Count;
+        while (n-- > 1)
+        {
+            var k = rng.Next(n + 1);
+            (diceList[k], diceList[n]) = (diceList[n], diceList[k]);
+        }
+        
+        for (var row = 0; row < BoardSize; row++)
+        {
+            board[row] = new Cell[BoardSize];
+            for (var col = 0; col < BoardSize; col++)
+            {
+                var die = diceList[row * BoardSize + col];
+                var face = die[rng.Next(6)];
+                board[row][col] = new Cell { Letter = face, Row = row, Column = col };
+            }
+        }
+
+        return board;
+    }
+
+    private bool BoardIsEmpty()
+    {
+        return !_board.All(x => x.All(c => c.Letter != null));
+    }
+    
+    private async Task GetValidWordsFromDictionary()
+    {
+        if (BoardIsEmpty()) return;
+        
+        _searching = true;
+        
+        var characterCounts = _board.SelectMany(x => x.SelectMany(c => c.Letter.Select(l => l))).GroupBy(x => x).ToDictionary(x => x.Key.ToString(), x => x.Count());
+        
+        var validWordsWithCounts = _validWords.Where(word => word.GroupBy(x => x.ToString()).All(c => characterCounts.ContainsKey(c.Key) && c.Count() <= characterCounts[c.Key])).ToList();
+        
+        // Now we have a list of valid words, we can search for them in the board
+        _foundWords = validWordsWithCounts.Where(word => FindWordOnBoard(word) != null).Select(x => string.Join("", x)).OrderByDescending(x => x.Length).ThenBy(x => x).ToList();
+
+        _searching = false;
+    }
+
+    private List<Cell>? FindWordOnBoard(string word)
+    {
+        if (BoardIsEmpty()) return null;
+        var paths = new List<List<Cell>>();
+        
+        // Get first letter to kick it off
+        var firstLetter = word[0].ToString();
+        var wordStart = 1;
+        if (firstLetter == "Q" && word.Length > 1 && word[1].ToString().ToUpper() == "U")
+        {
+            firstLetter = "Qu";
+            wordStart = 2;
+        }
+        
+        var firstCells = GetAllCellsWithLetter(firstLetter);
+        foreach (var cell in firstCells)
+        {
+            var path = new List<Cell> { cell };
+            paths.Add(path);
+        }
+        
+        // Now iterate through the rest of the letters
+        for (var i = wordStart; i < word.Length; i++)
+        {
+            var letter = word[i].ToString();
+            if (letter == "Q" && word.Length > i + 1 && word[i + 1] == 'u')
+            {
+                letter = "Qu";
+                i++;
+            }
+            var nextPaths = new List<List<Cell>>();
+            foreach (var path in paths)
+            {
+                var lastCell = path.Last();
+                var neighbors = GetNeighbours(lastCell);
+                foreach (var neighbor in neighbors)
+                {
+                    if (path.Contains(neighbor)) continue;
+                    if (neighbor.Letter == letter.ToUpper())
+                    {
+                        var newPath = new List<Cell>(path) { neighbor };
+                        nextPaths.Add(newPath);
+                    }
+                }
+            }
+            paths = nextPaths;
+            if (!paths.Any()) break;
+        }
+
+        return paths.FirstOrDefault();
+    }
+    
+    private void HighlightWordOnBoard(string word)
+    {
+        if (_searching) return;
+        _board.SelectMany(x => x).ToList().ForEach(x => x.IsHighlighted = false);
+        var path = FindWordOnBoard(word);
+        path?.ForEach(x => x.IsHighlighted = true);
+        StateHasChanged();
+    }
+
+    private IEnumerable<Cell> GetAllCellsWithLetter(string letter)
+    {
+        return _board.SelectMany(x => x.Where(c => c.Letter.ToUpper() == letter.ToUpper()));
+    }
+
+    private IEnumerable<Cell> GetNeighbours(Cell cell)
+    {
+        return _board.SelectMany(x => x.Where(c => c.Row >= cell.Row - 1 && c.Row <= cell.Row + 1 && c.Column >= cell.Column - 1 && c.Column <= cell.Column + 1)).Except(new[] { cell });
+    }
+
+    private bool FilterFunc(string searchWord) => FilterFunc((_searchWord, 0), searchWord);
+    private bool FilterFunc((string Word, int Score) word, string searchWord)
+    {
+        return string.IsNullOrWhiteSpace(word.Word) || string.IsNullOrWhiteSpace(searchWord) || searchWord.Contains(_searchWord, StringComparison.OrdinalIgnoreCase);
+    }
+}

@@ -1,0 +1,37 @@
+﻿@inherits LayoutComponentBase
+
+<MudLayout>
+    <MudAppBar Color="@Color.Transparent">
+        <MudText Typo="@Typo.h5">Boggle + @darkMode.ToString()</MudText>
+        <MudSpacer />
+        <MudToggleIconButton 
+            @bind-Toggled="@darkMode"
+            Icon="@Icons.Material.Filled.DarkMode" Title="Switch to Dark Mode"
+            ToggledIcon="@Icons.Material.Filled.LightMode" ToggledTitle="Switch to Light Mode" />
+    </MudAppBar>
+    <MudMainContent>
+        @Body
+    </MudMainContent>
+</MudLayout>
+
+<MudThemeProvider @ref="@_mudThemeProvider" @bind-IsDarkMode="@darkMode"/>
+<MudDialogProvider/>
+<MudSnackbarProvider/>
+
+@code {
+
+    private MudThemeProvider _mudThemeProvider;
+    private bool darkMode;
+
+    private bool AlarmOn { get; set; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            darkMode = await _mudThemeProvider.GetSystemPreference();
+            StateHasChanged();
+        }
+    }
+    
+}
